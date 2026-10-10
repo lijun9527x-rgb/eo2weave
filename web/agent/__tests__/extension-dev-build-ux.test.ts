@@ -1,7 +1,16 @@
 // @vitest-environment node
-/// <reference types="vite/client" />
 import fs from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// WXT supplies these ambient types in the extension. This Node test imports
+// that module from the web project without depending on a separate Vite client.
+declare global {
+  interface ImportMetaEnv {
+    readonly MODE: string
+    readonly VITE_CW_DEV_WEBAPP_ORIGIN?: string
+  }
+  interface ImportMeta { readonly env: ImportMetaEnv }
+}
 
 vi.mock('wxt', () => ({ defineConfig: (config: unknown) => config }))
 
