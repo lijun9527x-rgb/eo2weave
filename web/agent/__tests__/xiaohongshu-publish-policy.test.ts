@@ -49,7 +49,7 @@ describe('upstream RFC3339 schedule and 1h–14d window', () => {
 })
 
 function ftyp(brand: string, compatible: string[] = [], size = 16 + compatible.length * 4): Uint8Array {
-  const bytes = new Uint8Array(16 + compatible.length * 4)
+  const bytes = new Uint8Array(Math.max(17, 16 + compatible.length * 4))
   new DataView(bytes.buffer).setUint32(0, size)
   bytes.set(new TextEncoder().encode('ftyp' + brand), 4)
   compatible.forEach((value, i) => bytes.set(new TextEncoder().encode(value), 16 + i * 4))
@@ -71,7 +71,12 @@ describe('h2non/filetype v1.1.3 image signatures', () => {
   it.each([['mif1', []], ['msf1', ['avif']], ['avif', ['heic']], ['heix', []]] as const)('rejects unsupported HEIF brand %s with %s', (brand, compatible) => {
     expect(imageMime(ftyp(brand, [...compatible]))).toBeNull()
   })
-  it.each([8, 100])('rejects an invalid ftyp box size %s', (size) => expect(imageMime(ftyp('heic', [], size))).toBeNull())
+  it('rejects a box size beyond available bytes', () => expect(imageMime(ftyp('heic', [], 100))).toBeNull())
+  it('returns no HEIF brand for the upstream 16-byte GetFtyp boundary', () => expect(imageMime(ftyp('heic').slice(0, 16))).toBeNull())
+  it.each([0, 8])('does not add a declared-box-size minimum absent from upstream (%s)', (size) => expect(imageMime(ftyp('heic', [], size))).toBe('image/heif'))
+  it('checks the upstream full compatible brand even when declared size ends within it', () => {
+    expect(imageMime(ftyp('mif1', ['heic'], 17))).toBe('image/heif')
+  })
   it.each([[], [255, 216], [137, 80, 78], [71, 73], [60, 104, 116, 109, 108, 62]].map((bytes) => ({ bytes })))('rejects incomplete or non-image bytes $bytes', ({ bytes }) => {
     expect(imageMime(Uint8Array.from(bytes))).toBeNull()
   })

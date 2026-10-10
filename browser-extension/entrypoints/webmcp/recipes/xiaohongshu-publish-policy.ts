@@ -104,12 +104,18 @@ export function imageMime(bytes: Uint8Array): string | null {
   if (ascii(0, 3) === 'II\xbc') return 'image/vnd.ms-photo'
   if (ascii(0, 4) === '8BPS') return 'image/vnd.adobe.photoshop'
   if (ascii(0, 4) === 'AC10') return 'image/vnd.dwg'
-  if (ascii(4, 8) === 'ftyp') {
+  // Upstream GetFtyp returns empty brands below 17 bytes. IsISOBMFF checks
+  // only the available length, not a minimum declared box size.
+  if (bytes.length >= 17 && ascii(4, 8) === 'ftyp') {
     const brand = ascii(8, 12)
     const size = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0)
     const compatible = []
-    for (let i = 16; i + 4 <= Math.min(size, bytes.length); i += 4) compatible.push(ascii(i, i + 4))
-    if (size >= 16 && size <= bytes.length && (brand === 'heic' || (['mif1', 'msf1'].includes(brand) && compatible.includes('heic')))) return 'image/heif'
+    if (size <= bytes.length) {
+      for (let i = 16; i < size; i += 4) {
+        if (bytes.length >= i + 4) compatible.push(ascii(i, i + 4))
+      }
+      if (brand === 'heic' || (['mif1', 'msf1'].includes(brand) && compatible.includes('heic'))) return 'image/heif'
+    }
   }
   if (bytes.length >= 4 && bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 1 && bytes[3] === 0) return 'image/vnd.microsoft.icon'
   return null
