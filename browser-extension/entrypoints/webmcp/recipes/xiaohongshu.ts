@@ -9,7 +9,7 @@ export const xiaohongshuRecipe: WebMCPRecipe = {
   displayName: '小红书 — Xiaohongshu',
   description: 'Read Xiaohongshu notes and profiles, post or reply to comments and like or unlike notes in your current tab, and prepare image or video notes in your creator-platform tab. Final note publishing is deferred.',
   category: 'social',
-  version: '0.7.1',
+  version: '0.7.2',
   glyph: '📕',
   tools: [
     {

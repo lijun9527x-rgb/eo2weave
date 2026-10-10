@@ -31,7 +31,7 @@ afterEach(() => { delete stateWindow.__INITIAL_STATE__; vi.clearAllTimers(); vi.
 describe('upstream LikeAction in the current tab', () => {
   it('likes the first upstream button and verifies exact page state', async () => {
     state(false, true)
-    expect(await call()).toMatchObject({ status: 'ok', recipe_version: '0.7.1', data: { unlike: false, target_liked: true, phase: 'completed', click_attempts: 1, completed_clicks: 1, click_attempted: true, state_verified: true, skipped_noop: false, success_scope: 'upstream_state_check', state_before: { liked: false, collected: true }, state_after: { liked: true, collected: true, liked_raw: true, liked_value_source: 'page_boolean' } } })
+    expect(await call()).toMatchObject({ status: 'ok', recipe_version: '0.7.2', data: { unlike: false, target_liked: true, phase: 'completed', click_attempts: 1, completed_clicks: 1, click_attempted: true, state_verified: true, skipped_noop: false, success_scope: 'upstream_state_check', state_before: { liked: false, collected: true }, state_after: { liked: true, collected: true, liked_raw: true, liked_value_source: 'page_boolean' } } })
     expect(input.click).toHaveBeenCalledOnce()
     expect(input.click).toHaveBeenCalledWith(document.querySelector('.interact-container .left .like-lottie'))
     expect(assign).not.toHaveBeenCalled()

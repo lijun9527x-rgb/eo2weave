@@ -87,7 +87,7 @@ describe('Xiaohongshu note navigation regressions', () => {
     expect(xiaohongshuRecipe.tools.find((tool) => tool.name === 'xhs_post_comment_to_feed')?.readOnlyHint).toBe(false)
     expect(xiaohongshuRecipe.tools.find((tool) => tool.name === 'xhs_reply_comment_in_feed')?.readOnlyHint).toBe(false)
     expect(xiaohongshuRecipe.tools.find((tool) => tool.name === 'xhs_like_feed')?.readOnlyHint).toBe(false)
-    expect(xiaohongshuRecipe.version).toBe('0.7.1')
+    expect(xiaohongshuRecipe.version).toBe('0.7.2')
   })
 
   it('returns a visible complete author profile link so the agent can continue to the profile', async () => {
