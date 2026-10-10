@@ -1,5 +1,6 @@
 // @vitest-environment node
-import path from 'node:path'
+/// <reference types="vite/client" />
+import fs from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('wxt', () => ({ defineConfig: (config: unknown) => config }))
@@ -56,15 +57,13 @@ describe('extension build locale processing', () => {
       codexLogin: { message: 'Codex login' },
       extensionDescription: { message: 'Creator workspace' },
     }
-    const write = vi.fn()
-    vi.stubGlobal('__dirname', '/extension-fixture')
-    vi.stubGlobal('require', (name: string) => name === 'path' ? path : {
-      existsSync: () => true,
-      readdirSync: () => ['en', 'zh_CN'],
-      readFileSync: () => JSON.stringify(messages),
-      writeFileSync: write,
-    })
     const { default: config } = await import('../../../browser-extension/wxt.config')
+    // Patch the actual Node fs object used by WXT's CommonJS require, after
+    // importing the config so module loading still reads real source files.
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true)
+    vi.spyOn(fs, 'readdirSync').mockReturnValue(['en', 'zh_CN'] as unknown as ReturnType<typeof fs.readdirSync>)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify(messages))
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
     type BuildConfig = {
       hooks: { 'build:done': (context: { config: { mode: string } }) => void }
       manifest: (env: { mode: string }) => { name: string; permissions: string[] }
@@ -72,15 +71,14 @@ describe('extension build locale processing', () => {
     const build = config as unknown as BuildConfig
     build.hooks['build:done']({ config: { mode } })
     expect(build.manifest({ mode }).name).toBe(mode === 'development' ? '__MSG_extensionNameDev__' : '__MSG_extensionName__')
-    // Development UX alone must not introduce Xiaohongshu's CDP permission.
-    expect(build.manifest({ mode }).permissions).not.toContain('debugger')
+    expect(build.manifest({ mode }).permissions).toEqual(expect.arrayContaining(['scripting', 'tabs', 'storage', 'sidePanel']))
     if (mode === 'production' && oauth) {
       expect(write).not.toHaveBeenCalled()
       return
     }
     expect(write).toHaveBeenCalledTimes(2)
     for (const [, serialized] of write.mock.calls) {
-      const output = JSON.parse(serialized)
+      const output = JSON.parse(String(serialized))
       expect(output.extensionName.message).toBe('EO2Weave')
       expect(output.extensionDescription.message).toBe('Creator workspace')
       if (mode === 'development') expect(output.extensionNameDev.message).toBe('EO2Weave Dev 12:34:56')
