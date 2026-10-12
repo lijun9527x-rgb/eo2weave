@@ -236,7 +236,7 @@ describe('video preparation follows upstream publish_with_video', () => {
     } })
     const prepared = await call('prepare', { ...args, content: '新的正文' })
     expect(prepared).toMatchObject({ status: 'ok', data: {
-      phase: 'supply_unconfirmed', recorded_phase: 'processing', file,
+      phase: 'supply_unconfirmed', recorded_phase: 'ready', file,
       supplied_in_this_call: false, supplied_in_current_runtime: null, next_action: null,
     } })
     expect(prepared.data.next_step).toContain('historical supply record')
@@ -270,15 +270,22 @@ describe('video preparation follows upstream publish_with_video', () => {
     } })
     expect(changed).toHaveBeenCalledOnce()
   })
-  it('keeps restored-file acceptance unknown even when the upstream button is ready', async () => {
+  it.each(['processing', 'uploaded', 'configuring', 'ready'])('does not configure a different ready video from a restored %s record', async (phase) => {
     sessionStorage.setItem('eo2_xhs_video_prepare_v1', JSON.stringify({
-      operation_id: args.operation_id, request: videoRequest(args), phase: 'processing', supplied_to_page: true,
+      operation_id: args.operation_id, request: videoRequest(args), phase, supplied_to_page: true,
       file: { name: 'old.mov', size: 87425348, mime: 'video/quicktime' }, review: null,
     }))
+    document.querySelector<HTMLInputElement>('.d-input input')!.value = '另一个视频的标题'
+    document.querySelector('[contenteditable]')!.textContent = '另一个视频的正文'
     expect(await call('status')).toMatchObject({ status: 'ok', data: {
-      phase: 'uploaded', processing: { ready: true }, supplied_in_current_runtime: null,
-      supplied_in_this_call: false, file_acceptance_verified: null, next_action: 'configure',
+      phase: 'supply_unconfirmed', recorded_phase: phase, processing: { ready: true }, supplied_in_current_runtime: null,
+      supplied_in_this_call: false, file_acceptance_verified: null, next_action: null,
     } })
+    expect(await call('prepare', args)).toMatchObject({ data: { phase: 'supply_unconfirmed', recorded_phase: phase, next_action: null } })
+    expect(await call('configure', { content: '不应写入' })).toMatchObject({ error_code: 'VIDEO_SUPPLY_UNCONFIRMED', data: { phase: 'supply_unconfirmed', next_action: null } })
+    expect(document.querySelector<HTMLInputElement>('.d-input input')!.value).toBe('另一个视频的标题')
+    expect(document.querySelector('[contenteditable]')!.textContent).toBe('另一个视频的正文')
+    expect(typeWithCdp).not.toHaveBeenCalled()
     expect(document.querySelector<HTMLInputElement>('.upload-input')!.files).toHaveLength(0)
   })
   it('does not call a previously ready form ready when the page returns to an empty uploader', async () => {
@@ -291,6 +298,22 @@ describe('video preparation follows upstream publish_with_video', () => {
       supplied_in_current_runtime: true, file_acceptance_verified: null, next_action: null,
     } })
     expect(changed).not.toHaveBeenCalled()
+  })
+  it('does not reuse supply evidence after a script reload when another video is ready', async () => {
+    await uploaded(); await call('configure')
+    const journal = sessionStorage.getItem('eo2_xhs_video_prepare_v1')
+    form()
+    document.querySelector<HTMLInputElement>('.d-input input')!.value = '手动上传的其他视频'
+    vi.resetModules()
+    const { xiaohongshuVideoPublishTools: reloaded } = await import('../../../browser-extension/entrypoints/webmcp/recipes/xiaohongshu-publish-video')
+    expect(await reloaded.xhs_publish_video({ action: 'status', operation_id: args.operation_id })).toMatchObject({ data: {
+      phase: 'supply_unconfirmed', recorded_phase: 'ready', supplied_in_current_runtime: null, processing: { ready: true }, next_action: null,
+    } })
+    expect(await reloaded.xhs_publish_video({ action: 'configure', operation_id: args.operation_id, content: '旧任务正文' })).toMatchObject({ error_code: 'VIDEO_SUPPLY_UNCONFIRMED' })
+    expect(document.querySelector<HTMLInputElement>('.d-input input')!.value).toBe('手动上传的其他视频')
+    expect(document.querySelector('[contenteditable]')!.textContent).toBe('')
+    expect(sessionStorage.getItem('eo2_xhs_video_prepare_v1')).toBe(journal)
+    expect(document.querySelector<HTMLInputElement>('.upload-input')!.files).toHaveLength(0)
   })
   it('never executes a stale final-submission call', async () => {
     const click = vi.fn(); document.querySelector('xhs-publish-btn')!.addEventListener('click', click)
