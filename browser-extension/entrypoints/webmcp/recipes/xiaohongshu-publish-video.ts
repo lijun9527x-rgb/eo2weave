@@ -40,22 +40,42 @@ type Phase = 'prepared' | 'processing' | 'uploaded' | 'configuring' | 'ready'
 interface Journal {
   operation_id: string; request: VideoRequest; phase: Phase; supplied_to_page: boolean
   file: { name: string; size: number; mime: string | null } | null; review: unknown; configure_fields?: PublishFormField[] | null
+  supply_runtime_id?: string
 }
 const JOURNAL_KEY = 'eo2_xhs_video_prepare_v1'
+// A restored journal cannot prove a supply happened in this script runtime.
+// This marker tracks file assignment only, never website acceptance.
+// Initialize only on a creator-page upload, not on unrelated insecure pages.
+let supplyRuntimeId: string | null = null
 let busy = false
 const load = (): Journal | null => { const raw = sessionStorage.getItem(JOURNAL_KEY); return raw ? JSON.parse(raw) as Journal : null }
 const save = (journal: Journal) => sessionStorage.setItem(JOURNAL_KEY, JSON.stringify(journal))
 function reconcile(journal: Journal) {
   if (journal.phase === 'processing' && videoProcessingState().ready) { journal.phase = 'uploaded'; save(journal) }
 }
-function summary(journal: Journal) {
-  return { operation_id: journal.operation_id, phase: journal.phase, video: journal.request.video, file: journal.file,
-    supplied_to_page: journal.supplied_to_page, processing: videoProcessingState(), review: journal.review,
+function summary(journal: Journal, suppliedInThisCall = false) {
+  const processing = videoProcessingState()
+  const suppliedInCurrentRuntime = !journal.supplied_to_page ? false : supplyRuntimeId !== null && journal.supply_runtime_id === supplyRuntimeId ? true : null
+  // Keep the persisted phase as history, but do not advertise restored supply
+  // as ongoing processing when the current upstream button is not ready.
+  const phase = journal.supplied_to_page && !processing.ready && (suppliedInCurrentRuntime === null || journal.phase !== 'processing') ? 'supply_unconfirmed' : journal.phase
+  const nextAction = phase === 'supply_unconfirmed' || phase === 'ready' ? null
+    : !journal.supplied_to_page ? 'upload' : phase === 'processing' ? 'status' : 'configure'
+  const nextStep = phase === 'supply_unconfirmed'
+    ? 'The historical supply record does not establish ongoing processing or current page acceptance. prepare/status did not upload a video. Check the page and this task\'s calls. If this task has not actually called upload, explicitly call upload with this operation_id and video. Do not use status as proof of upload or automatically repeat an uncertain upload.'
+    : nextAction === 'upload' ? 'Call upload with this operation_id and video to supply the authorized file. prepare does not upload it.'
+    : nextAction === 'status' ? 'A file was supplied in this runtime. Query status for the upstream button criterion; supply alone does not prove current page acceptance. Check the page if it remains empty; do not automatically re-upload.'
+    : nextAction === 'configure' ? 'The upstream button criterion is ready. Use configure for the prepared form; this does not verify that the historical file is currently accepted.'
+    : 'Review the prepared video on the website. Final publishing is deferred; stop here.'
+  return { operation_id: journal.operation_id, phase, recorded_phase: journal.phase, video: journal.request.video, file: journal.file,
+    file_scope: 'historical_supply_record', supplied_to_page: journal.supplied_to_page,
+    supplied_in_this_call: suppliedInThisCall, supplied_in_current_runtime: suppliedInCurrentRuntime,
+    file_acceptance_verified: null, processing, review: journal.review,
     publication_enabled: false, submit_attempted: false, published_verified: false,
-    next_step: journal.phase === 'ready' ? 'Review the prepared video on the website. Final publishing is deferred; stop here.' : journal.phase === 'processing' ? 'Query status on this same tab to observe the upstream processing criterion.' : null }
+    next_action: nextAction, next_step: nextStep }
 }
-function failed(code: string, message: string, journal: Journal | null) {
-  return { ...error(code, message), data: journal ? summary(journal) : { publication_enabled: false, submit_attempted: false } }
+function failed(code: string, message: string, journal: Journal | null, suppliedInThisCall = false) {
+  return { ...error(code, message), data: journal ? summary(journal, suppliedInThisCall) : { publication_enabled: false, submit_attempted: false } }
 }
 export const xiaohongshuVideoPublishTools: Record<string, (args: Record<string, unknown>) => Promise<unknown>> = {
   async xhs_publish_video(args) {
@@ -71,6 +91,7 @@ export const xiaohongshuVideoPublishTools: Record<string, (args: Record<string, 
     if (busy) return error('PUBLISH_BUSY', 'Another video action is running in this tab.')
     busy = true
     let journal: Journal | null = null
+    let suppliedInThisCall = false
     try {
       journal = load()
       if (journal) reconcile(journal)
@@ -104,17 +125,20 @@ export const xiaohongshuVideoPublishTools: Record<string, (args: Record<string, 
         if (!upload) return failed('UPLOAD_INPUT_UNAVAILABLE', 'Video upload input unavailable.', journal)
         const transfer = new DataTransfer(); transfer.items.add(file)
         upload.files = transfer.files
+        suppliedInThisCall = true
         journal.phase = 'processing'; journal.supplied_to_page = true; journal.file = { name: file.name, size: file.size, mime: file.type || null }
+        supplyRuntimeId ??= crypto.randomUUID()
+        journal.supply_runtime_id = supplyRuntimeId
         journal.review = null; delete journal.configure_fields; save(journal)
         upload.dispatchEvent(new Event('change', { bubbles: true }))
         // Upstream waits in one-second intervals, with a five-minute page context
         // around its ten-minute button waiter. EO2 can continue via status.
         while (Date.now() < deadline) {
           reconcile(journal)
-          if (journal.phase !== 'processing') return result('ok', summary(journal))
+          if (journal.phase !== 'processing') return result('ok', summary(journal, suppliedInThisCall))
           await delay(1000)
         }
-        return failed('VIDEO_PROCESSING_PENDING', 'File supplied; the upstream publish-button readiness criterion was not observed within this call. Query status.', journal)
+        return failed('VIDEO_PROCESSING_PENDING', 'File supplied; the upstream publish-button readiness criterion was not observed within this call. Query status.', journal, suppliedInThisCall)
       }
       if (!journal.supplied_to_page || !videoProcessingState().ready) return failed('VIDEO_PROCESSING_PENDING', 'Wait for the uploaded video to satisfy the upstream publish-button readiness criterion before filling.', journal)
       const updatedFields = fields.filter((field) => Object.prototype.hasOwnProperty.call(args, field))
@@ -129,7 +153,7 @@ export const xiaohongshuVideoPublishTools: Record<string, (args: Record<string, 
       delete journal.configure_fields; journal.phase = 'ready'; save(journal)
       return result('ok', summary(journal))
     } catch (caught) {
-      return failed('PUBLISH_STEP_FAILED', caught instanceof Error ? caught.message : 'Video preparation failed.', journal)
+      return failed('PUBLISH_STEP_FAILED', caught instanceof Error ? caught.message : 'Video preparation failed.', journal, suppliedInThisCall)
     } finally { busy = false }
   },
 }

@@ -141,7 +141,12 @@ describe('video preparation follows upstream publish_with_video', () => {
     widget.setAttribute('submit-disabled', 'true'); document.querySelector('.upload-input')!.addEventListener('change', changed)
     const pending = xiaohongshuVideoPublishTools.xhs_publish_video({ action: 'upload', operation_id: args.operation_id, video: args.video })
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(await pending).toMatchObject({ error_code: 'VIDEO_PROCESSING_PENDING', data: { phase: 'processing' } })
+    expect(await pending).toMatchObject({ error_code: 'VIDEO_PROCESSING_PENDING', data: {
+      phase: 'processing', supplied_in_this_call: true, supplied_in_current_runtime: true, next_action: 'status',
+    } })
+    expect(await call('status')).toMatchObject({ data: {
+      phase: 'processing', supplied_in_this_call: false, supplied_in_current_runtime: true, next_action: 'status',
+    } })
     widget.setAttribute('submit-disabled', 'false')
     expect(await call('status')).toMatchObject({ status: 'ok', data: { phase: 'uploaded' } })
     expect(changed).toHaveBeenCalledOnce()
@@ -204,6 +209,87 @@ describe('video preparation follows upstream publish_with_video', () => {
     const changed = vi.fn(); document.querySelector('.upload-input')!.addEventListener('change', changed)
     expect(await call('prepare', { ...args, content: '更新文稿' })).toMatchObject({ status: 'ok', data: { phase: 'uploaded', supplied_to_page: true } })
     expect(await call('configure')).toMatchObject({ status: 'ok', data: { review: { observed_text: { content: '更新文稿' } } } })
+    expect(changed).not.toHaveBeenCalled()
+  })
+  it('directs a fresh preparation to upload without claiming the ready button supplied a file', async () => {
+    const response = await call('prepare', args)
+    expect(response).toMatchObject({ status: 'ok', data: {
+      phase: 'prepared', recorded_phase: 'prepared', supplied_to_page: false,
+      supplied_in_this_call: false, supplied_in_current_runtime: false,
+      file_scope: 'historical_supply_record', file_acceptance_verified: null, next_action: 'upload',
+    } })
+    expect(response.data.next_step).toContain('prepare does not upload')
+    expect(document.querySelector<HTMLInputElement>('.upload-input')!.files).toHaveLength(0)
+  })
+  it('reports a restored legacy record on an empty uploader as unconfirmed instead of ongoing processing', async () => {
+    const file = { name: 'video.mov', size: 87425348, mime: 'video/quicktime' }
+    sessionStorage.setItem('eo2_xhs_video_prepare_v1', JSON.stringify({
+      operation_id: args.operation_id, request: videoRequest(args), phase: 'ready', supplied_to_page: true, file, review: null,
+    }))
+    document.querySelector('xhs-publish-btn')!.remove()
+    const changed = vi.fn()
+    document.querySelector('.upload-input')!.addEventListener('change', changed)
+    expect(await call('status')).toMatchObject({ status: 'ok', data: {
+      phase: 'supply_unconfirmed', recorded_phase: 'ready', file, supplied_to_page: true,
+      supplied_in_this_call: false, supplied_in_current_runtime: null,
+      file_acceptance_verified: null, processing: { ready: false, button_kind: null }, next_action: null,
+    } })
+    const prepared = await call('prepare', { ...args, content: '新的正文' })
+    expect(prepared).toMatchObject({ status: 'ok', data: {
+      phase: 'supply_unconfirmed', recorded_phase: 'processing', file,
+      supplied_in_this_call: false, supplied_in_current_runtime: null, next_action: null,
+    } })
+    expect(prepared.data.next_step).toContain('historical supply record')
+    expect(prepared.data.next_step).toContain('explicitly call upload')
+    expect(prepared.data.next_step).not.toContain('Query status')
+    expect(await call('status')).toMatchObject({ data: { phase: 'supply_unconfirmed' } })
+    expect(changed).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLInputElement>('.upload-input')!.files).toHaveLength(0)
+  })
+  it('allows explicit upload after an unconfirmed historical record and reports only that call as supplying', async () => {
+    sessionStorage.setItem('eo2_xhs_video_prepare_v1', JSON.stringify({
+      operation_id: args.operation_id, request: videoRequest(args), phase: 'processing', supplied_to_page: true,
+      file: { name: 'old.mov', size: 87425348, mime: 'video/quicktime' }, review: null, supply_runtime_id: 'previous-runtime',
+    }))
+    const widget = document.querySelector('xhs-publish-btn')!
+    widget.setAttribute('submit-disabled', 'true')
+    expect(await call('status')).toMatchObject({ data: { phase: 'supply_unconfirmed', supplied_in_current_runtime: null } })
+    const changed = vi.fn(() => widget.setAttribute('submit-disabled', 'false'))
+    document.querySelector('.upload-input')!.addEventListener('change', changed)
+    stageFile()
+    expect(await call('upload', { video: args.video })).toMatchObject({ status: 'ok', data: {
+      phase: 'uploaded', recorded_phase: 'uploaded', supplied_in_this_call: true,
+      supplied_in_current_runtime: true, file: { name: 'video.mov', size: 3 },
+      file_acceptance_verified: null, next_action: 'configure',
+    } })
+    expect(await call('status')).toMatchObject({ data: {
+      phase: 'uploaded', supplied_in_this_call: false, supplied_in_current_runtime: true, next_action: 'configure',
+    } })
+    expect(await call('prepare', { ...args, content: '只更新文稿' })).toMatchObject({ data: {
+      phase: 'uploaded', supplied_in_this_call: false, supplied_in_current_runtime: true, next_action: 'configure',
+    } })
+    expect(changed).toHaveBeenCalledOnce()
+  })
+  it('keeps restored-file acceptance unknown even when the upstream button is ready', async () => {
+    sessionStorage.setItem('eo2_xhs_video_prepare_v1', JSON.stringify({
+      operation_id: args.operation_id, request: videoRequest(args), phase: 'processing', supplied_to_page: true,
+      file: { name: 'old.mov', size: 87425348, mime: 'video/quicktime' }, review: null,
+    }))
+    expect(await call('status')).toMatchObject({ status: 'ok', data: {
+      phase: 'uploaded', processing: { ready: true }, supplied_in_current_runtime: null,
+      supplied_in_this_call: false, file_acceptance_verified: null, next_action: 'configure',
+    } })
+    expect(document.querySelector<HTMLInputElement>('.upload-input')!.files).toHaveLength(0)
+  })
+  it('does not call a previously ready form ready when the page returns to an empty uploader', async () => {
+    await uploaded(); await call('configure')
+    const changed = vi.fn()
+    document.querySelector('.upload-input')!.addEventListener('change', changed)
+    document.querySelector('xhs-publish-btn')!.remove()
+    expect(await call('status')).toMatchObject({ data: {
+      phase: 'supply_unconfirmed', recorded_phase: 'ready', supplied_in_this_call: false,
+      supplied_in_current_runtime: true, file_acceptance_verified: null, next_action: null,
+    } })
     expect(changed).not.toHaveBeenCalled()
   })
   it('never executes a stale final-submission call', async () => {
